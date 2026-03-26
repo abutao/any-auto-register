@@ -90,7 +90,7 @@ class RegistrationEngine:
 
     def __init__(
         self,
-        email_service: BaseEmailService,
+        email_service: Any,
         proxy_url: Optional[str] = None,
         callback_logger: Optional[Callable[[str], None]] = None,
         task_uuid: Optional[str] = None

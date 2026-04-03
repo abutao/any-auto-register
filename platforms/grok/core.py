@@ -8,11 +8,17 @@ Grok (x.ai) 自动注册
 4. 完成注册并接受 ToS
 5. 提取 sso / sso-rw cookie
 """
+
 import ctypes
 import random
 import string
 import time
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
+
+from core.browser_runtime import (
+    ensure_browser_display_available,
+    resolve_browser_headless,
+)
 
 
 UA = (
@@ -30,13 +36,27 @@ def _rand_password(n: int = 12) -> str:
 
 
 class GrokRegister:
-    def __init__(self, captcha_solver=None, yescaptcha_key: str = "", proxy=None, log_fn=print):
+    def __init__(
+        self,
+        captcha_solver=None,
+        yescaptcha_key: str = "",
+        proxy=None,
+        log_fn=print,
+        headless: bool = False,
+    ):
         self.captcha_solver = captcha_solver
         self.key = yescaptcha_key
         self.proxy = proxy
         self.log = log_fn
+        self.headless = headless
 
-    def _wait_until(self, fn: Callable[[], bool], timeout: float = 30.0, interval: float = 0.5, desc: str = ""):
+    def _wait_until(
+        self,
+        fn: Callable[[], bool],
+        timeout: float = 30.0,
+        interval: float = 0.5,
+        desc: str = "",
+    ):
         start = time.time()
         while time.time() - start < timeout:
             if fn():
@@ -52,8 +72,13 @@ class GrokRegister:
         from patchright.sync_api import sync_playwright
 
         playwright = sync_playwright().start()
-        launch_kwargs = {
-            "headless": False,
+        headless, reason = resolve_browser_headless(
+            self.headless, default_headless=False
+        )
+        ensure_browser_display_available(headless)
+        self.log(f"浏览器模式: {'headless' if headless else 'headed'} ({reason})")
+        launch_kwargs: dict[str, Any] = {
+            "headless": headless,
             "channel": "msedge",
         }
         if self.proxy:
@@ -98,10 +123,15 @@ class GrokRegister:
             return page.locator("input[name=code]").count() > 0
 
         try:
-            self._wait_until(_email_verify_ready, timeout=15, desc="等待邮箱验证码页超时")
+            self._wait_until(
+                _email_verify_ready, timeout=15, desc="等待邮箱验证码页超时"
+            )
         except Exception:
             body = page.locator("body").inner_text()
-            if any(x in body for x in ["域名", "已被拒绝", "其他邮箱地址", "disposable", "rejected"]):
+            if any(
+                x in body
+                for x in ["域名", "已被拒绝", "其他邮箱地址", "disposable", "rejected"]
+            ):
                 raise RuntimeError(f"邮箱域名被拒绝: {body[:200]}")
             raise RuntimeError(f"邮箱提交失败: {body[:200]}")
 
@@ -129,14 +159,18 @@ class GrokRegister:
         self._wait_until(_user_form_ready, timeout=20, desc="等待完成注册页超时")
         self.log("  已进入完成注册页")
 
-    def _fill_user_form(self, page, given_name: str, family_name: str, password: str) -> None:
+    def _fill_user_form(
+        self, page, given_name: str, family_name: str, password: str
+    ) -> None:
         self.log(f"Step4: 填写用户信息 {given_name} {family_name} ...")
         page.locator("input[name=givenName]").fill(given_name)
         page.locator("input[name=familyName]").fill(family_name)
         page.locator("input[name=password]").fill(password)
 
     @staticmethod
-    def _find_turnstile_widget(page) -> Tuple[object, Optional[dict]]:
+    def _find_turnstile_widget(
+        page,
+    ) -> Tuple[Optional[Any], Optional[dict[str, Any]]]:
         for frame in page.frames:
             if "challenges.cloudflare.com" not in frame.url:
                 continue
@@ -181,7 +215,13 @@ class GrokRegister:
 
     @staticmethod
     def _has_turnstile_error(page) -> bool:
-        keywords = ["验证失败", "故障排除", "verification failed", "troubleshoot", "try again"]
+        keywords = [
+            "验证失败",
+            "故障排除",
+            "verification failed",
+            "troubleshoot",
+            "try again",
+        ]
         texts = []
         try:
             texts.append(page.locator("body").inner_text(timeout=800))
@@ -233,7 +273,9 @@ class GrokRegister:
             )
         )
 
-    def _wait_turnstile_token(self, page, wait_rounds: int = 25, wait_ms: int = 500) -> str:
+    def _wait_turnstile_token(
+        self, page, wait_rounds: int = 25, wait_ms: int = 500
+    ) -> str:
         for _ in range(wait_rounds):
             token = self._read_turnstile_token(page)
             if token and len(token) > 20:
@@ -323,11 +365,16 @@ class GrokRegister:
 
             click_x = box["x"] + min(28, max(18, box["width"] * 0.08))
             click_y = box["y"] + box["height"] / 2
-            self.log(f"  Turnstile click #{attempt + 1}: ({click_x:.1f}, {click_y:.1f})")
+            self.log(
+                f"  Turnstile click #{attempt + 1}: ({click_x:.1f}, {click_y:.1f})"
+            )
             try:
                 if frame:
                     frame.locator("body").click(
-                        position={"x": min(28, max(18, box["width"] * 0.08)), "y": box["height"] / 2},
+                        position={
+                            "x": min(28, max(18, box["width"] * 0.08)),
+                            "y": box["height"] / 2,
+                        },
                         timeout=2500,
                     )
                     page.wait_for_timeout(120)
@@ -343,7 +390,9 @@ class GrokRegister:
                 last_error = str(e)
 
             try:
-                token = self._native_click_turnstile(page, box, min(28, max(18, box["width"] * 0.08)))
+                token = self._native_click_turnstile(
+                    page, box, min(28, max(18, box["width"] * 0.08))
+                )
                 if token:
                     self.log(f"  Turnstile token: {token[:40]}...")
                     return token
@@ -366,6 +415,7 @@ class GrokRegister:
 
     def _submit_register(self, page) -> None:
         self.log("Step6: 提交完成注册...")
+
         def _tos_or_account_ready() -> bool:
             url = page.url
             body = page.locator("body").inner_text()
@@ -441,14 +491,24 @@ class GrokRegister:
         def _account_ready() -> bool:
             url = page.url
             body = page.locator("body").inner_text()
-            return "/account" in url or "您的账户" in body or self._has_auth_cookies(page.context.cookies())
+            return (
+                "/account" in url
+                or "您的账户" in body
+                or self._has_auth_cookies(page.context.cookies())
+            )
 
         self._wait_until(_account_ready, timeout=20, desc="等待账户页超时")
         page.wait_for_timeout(1500)
 
     @staticmethod
     def _pick_cookie(cookies: list, name: str) -> str:
-        domains = [".x.ai", "accounts.x.ai", ".grok.com", ".grokusercontent.com", ".grokipedia.com"]
+        domains = [
+            ".x.ai",
+            "accounts.x.ai",
+            ".grok.com",
+            ".grokusercontent.com",
+            ".grokipedia.com",
+        ]
         for domain in domains:
             for cookie in cookies:
                 if cookie.get("name") == name and cookie.get("domain") == domain:
@@ -458,7 +518,12 @@ class GrokRegister:
                 return cookie.get("value", "")
         return ""
 
-    def register(self, email: str, password: str = None, otp_callback: Optional[Callable[[], str]] = None) -> dict:
+    def register(
+        self,
+        email: str,
+        password: Optional[str] = None,
+        otp_callback: Optional[Callable[[], str]] = None,
+    ) -> dict:
         if not password:
             password = _rand_password()
         given_name = _rand_name()

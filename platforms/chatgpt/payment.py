@@ -7,9 +7,10 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 from curl_cffi import requests as cffi_requests
+from core.browser_runtime import ensure_browser_display_available
 from core.proxy_utils import build_requests_proxy_config
 
 # from ..database.models import Account  # removed: external dep
@@ -97,7 +98,7 @@ def _open_url_system_browser(url: str) -> bool:
 
 
 def generate_plus_link(
-    account: Account,
+    account: Any,
     proxy: Optional[str] = None,
     country: str = "SG",
 ) -> str:
@@ -143,7 +144,7 @@ def generate_plus_link(
 
 
 def generate_team_link(
-    account: Account,
+    account: Any,
     workspace_name: str = "MyTeam",
     price_interval: str = "month",
     seat_quantity: int = 5,
@@ -210,6 +211,7 @@ def open_url_incognito(url: str, cookies_str: Optional[str] = None) -> bool:
     def _launch():
         try:
             with sync_playwright() as p:
+                ensure_browser_display_available(False)
                 browser = p.chromium.launch(headless=False, args=["--incognito"])
                 ctx = browser.new_context()
                 if cookies_str:
@@ -225,7 +227,7 @@ def open_url_incognito(url: str, cookies_str: Optional[str] = None) -> bool:
     return True
 
 
-def check_subscription_status(account: Account, proxy: Optional[str] = None) -> str:
+def check_subscription_status(account: Any, proxy: Optional[str] = None) -> str:
     """
     检测账号当前订阅状态。
 

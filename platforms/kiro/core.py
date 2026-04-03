@@ -13,22 +13,27 @@ import hashlib
 import threading
 import base64
 import os
+import importlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Tuple, Union, Optional
+from typing import Any, Optional, Tuple, Union
 from urllib.parse import urlencode, urlparse, parse_qs
+from core.browser_runtime import (
+    ensure_browser_display_available,
+    resolve_browser_headless,
+)
 from urllib.request import Request, build_opener
 from core.proxy_utils import build_requests_proxy_config
 
 try:
     from curl_cffi import requests as cffi_requests
 except ImportError:
-    cffi_requests = None
+    cffi_requests: Any = None
 
 from playwright.sync_api import sync_playwright, TimeoutError, Page, Locator
 
 try:
-    from playwright_stealth import stealth_sync
-except ImportError:
+    stealth_sync = importlib.import_module("playwright_stealth").stealth_sync
+except Exception:
     stealth_sync = None
 
 # 如果有全局的 turnstile_strategy，可借用，这里留个 stub
@@ -177,6 +182,11 @@ class KiroRegister:
         self._captured_tokens = {}
         self._network_debug = []
 
+    def _require_context(self):
+        if self.context is None:
+            raise RuntimeError("浏览器上下文未初始化")
+        return self.context
+
     def log(self, msg):
         self.log_fn(f"[{self.tag}] {msg}")
 
@@ -223,8 +233,12 @@ class KiroRegister:
 
     def _init_browser(self):
         self.pw = sync_playwright().start()
-        launch_opts = {
-            "headless": self.headless,
+        headless, reason = resolve_browser_headless(
+            self.headless, default_headless=False
+        )
+        ensure_browser_display_available(headless)
+        launch_opts: dict[str, Any] = {
+            "headless": headless,
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -240,20 +254,22 @@ class KiroRegister:
         env_timezone = os.getenv("KIRO_TIMEZONE", "").strip()
         locale = env_locale or profile["locale"]
         timezone_id = env_timezone or profile["timezone_id"]
-        viewport = dict(profile["viewport"])
+        viewport: dict[str, int] = dict(profile["viewport"])
 
+        self.log(f"浏览器模式: {'headless' if headless else 'headed'} ({reason})")
         self.log(
             f"浏览器画像: {profile['name']} / {locale} / {timezone_id} / "
             f"{viewport['width']}x{viewport['height']}"
         )
-        self.context = self.browser.new_context(
-            user_agent=profile["user_agent"],
-            locale=locale,
-            timezone_id=timezone_id,
-            viewport=viewport,
-            color_scheme=random.choice(["light", "dark"]),
-            reduced_motion=random.choice(["reduce", "no-preference"]),
-        )
+        context_opts: dict[str, Any] = {
+            "user_agent": profile["user_agent"],
+            "locale": locale,
+            "timezone_id": timezone_id,
+            "viewport": viewport,
+            "color_scheme": random.choice(["light", "dark"]),
+            "reduced_motion": random.choice(["reduce", "no-preference"]),
+        }
+        self.context = self.browser.new_context(**context_opts)
         self.context.set_extra_http_headers({"Accept-Language": f"{locale},en;q=0.9"})
 
         # 拦截 Kiro 登录成功相关的请求/响应，提取 Token
@@ -653,14 +669,16 @@ class KiroRegister:
             "user-agent": "KiroIDE",
         }
         if cffi_requests is not None:
-            kwargs = {
+            kwargs: dict[str, Any] = {
                 "json": payload,
                 "headers": headers,
                 "timeout": 30,
                 "impersonate": "chrome131",
             }
             if self.proxy:
-                kwargs["proxies"] = build_requests_proxy_config(self.proxy)
+                proxies = build_requests_proxy_config(self.proxy)
+                if proxies:
+                    kwargs["proxies"] = proxies
             response = cffi_requests.post(url, **kwargs)
             if response.status_code != 200:
                 raise RuntimeError(
@@ -691,7 +709,7 @@ class KiroRegister:
         try:
             cookie_map = {
                 c.get("name", ""): c.get("value", "")
-                for c in self.context.cookies()
+                for c in self._require_context().cookies()
                 if c.get("domain", "").endswith("app.kiro.dev")
             }
             if cookie_map.get("AccessToken"):
@@ -864,7 +882,7 @@ class KiroRegister:
             )
 
             self.log("开始桌面端授权跳转 ...")
-            auth_page = self.context.new_page()
+            auth_page = self._require_context().new_page()
             auth_page.goto(authorize_url, wait_until="domcontentloaded", timeout=60000)
 
             started = time.time()
@@ -928,7 +946,7 @@ class KiroRegister:
             if not self.context:
                 self._init_browser()
                 created_browser = True
-            page = self.context.new_page()
+            page = self._require_context().new_page()
             page.goto(KIRO_SIGNIN_URL, wait_until="domcontentloaded")
             tokens = self._complete_desktop_idc_flow(
                 email=email, pwd=pwd, otp_callback=otp_callback
@@ -948,9 +966,9 @@ class KiroRegister:
     def register(
         self,
         email: str,
-        pwd: str = None,
+        pwd: Optional[str] = None,
         name: str = "Kiro User",
-        mail_token: str = None,
+        mail_token: Optional[str] = None,
         otp_timeout: int = 120,
         otp_callback=None,
     ) -> Tuple[bool, dict]:
@@ -962,7 +980,7 @@ class KiroRegister:
         page = None
         try:
             self._init_browser()
-            page = self.context.new_page()
+            page = self._require_context().new_page()
 
             if stealth_sync:
                 stealth_sync(page)
@@ -1031,6 +1049,8 @@ class KiroRegister:
             otp_input = stage_input if stage == "otp" else None
             if stage == "name":
                 self.log("2. 填写名字 (Your name)...")
+                if stage_input is None:
+                    return False, {"error": "未找到姓名输入框"}
                 self._type_like_human(page, stage_input, name)
                 self._click_primary_button(page)
                 self._human_sleep(1.1, 2.4)
@@ -1054,6 +1074,8 @@ class KiroRegister:
                 return False, {"error": "未获取到邮箱验证码(OTP Timeout)"}
 
             self.log(f"获取到验证码: {otp_code}，正在填入...")
+            if otp_input is None:
+                return False, {"error": "未找到 OTP 输入框"}
             self._type_like_human(page, otp_input, otp_code)
             self._click_primary_button(page)
             self._human_sleep(1.0, 2.2)
@@ -1149,7 +1171,7 @@ class KiroRegister:
                             "domain": c.get("domain", ""),
                             "path": c.get("path", ""),
                         }
-                        for c in self.context.cookies()
+                        for c in self._require_context().cookies()
                         if "kiro.dev" in c.get("domain", "")
                         or "aws" in c.get("domain", "")
                     ]
@@ -1205,7 +1227,7 @@ class KiroRegister:
                     with open("kiro_error.html", "w", encoding="utf-8") as f:
                         f.write(page.content())
                     self.log("HTML 已保存为 kiro_error.html")
-            except:
+            except Exception:
                 pass
             return False, {"error": str(e)}
         finally:

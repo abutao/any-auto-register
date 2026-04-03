@@ -1,4 +1,7 @@
 """Kiro 平台插件 - 基于 AWS Builder ID 注册"""
+
+from typing import Optional
+
 from core.base_platform import BasePlatform, Account, AccountStatus, RegisterConfig
 from core.base_mailbox import BaseMailbox
 from core.registry import register
@@ -10,37 +13,47 @@ class KiroPlatform(BasePlatform):
     display_name = "Kiro (AWS Builder ID)"
     version = "1.0.0"
 
-    def __init__(self, config: RegisterConfig = None, mailbox: BaseMailbox = None):
-        super().__init__(config)
+    def __init__(
+        self,
+        config: Optional[RegisterConfig] = None,
+        mailbox: Optional[BaseMailbox] = None,
+    ):
+        super().__init__(config or RegisterConfig())
         self.mailbox = mailbox
 
-    def register(self, email: str, password: str = None) -> Account:
+    def register(self, email: str, password: Optional[str] = None) -> Account:
         from platforms.kiro.core import KiroRegister
 
         proxy = self.config.proxy
         laoudo_account_id = self.config.extra.get("laoudo_account_id", "")
+        requested_headless = (self.config.executor_type or "protocol") != "headed"
 
-        reg = KiroRegister(proxy=proxy, tag="KIRO")
-        log_fn = getattr(self, '_log_fn', print)
-        reg.log = lambda msg: log_fn(msg)
+        reg = KiroRegister(proxy=proxy, tag="KIRO", headless=requested_headless)
+        log_fn = getattr(self, "_log_fn", print)
+        reg.log_fn = log_fn
 
         otp_timeout = int(self.config.extra.get("otp_timeout", 120))
 
         if self.mailbox:
-            mail_acct = self.mailbox.get_email()
+            mailbox = self.mailbox
+            mail_acct = mailbox.get_email()
+            if not mail_acct:
+                raise RuntimeError("未获取到可用邮箱账号")
             email = email or mail_acct.email
             log_fn(f"邮箱: {mail_acct.email}")
-            _before = self.mailbox.get_current_ids(mail_acct)
+            _before = mailbox.get_current_ids(mail_acct)
+
             def otp_cb():
                 log_fn("等待验证码...")
-                code = self.mailbox.wait_for_code(
+                code = mailbox.wait_for_code(
                     mail_acct,
                     keyword="builder id",
                     timeout=otp_timeout,
                     before_ids=_before,
-                    code_pattern=r'(?is)(?:verification\s+code|验证码)[^0-9]{0,20}(\d{6})',
+                    code_pattern=r"(?is)(?:verification\s+code|验证码)[^0-9]{0,20}(\d{6})",
                 )
-                if code: log_fn(f"验证码: {code}")
+                if code:
+                    log_fn(f"验证码: {code}")
                 return code
         else:
             otp_cb = None
@@ -85,6 +98,7 @@ class KiroPlatform(BasePlatform):
             return False
         try:
             from platforms.kiro.switch import refresh_kiro_token
+
             ok, _ = refresh_kiro_token(
                 refresh_token,
                 extra.get("clientId", ""),
@@ -106,7 +120,9 @@ class KiroPlatform(BasePlatform):
 
         if action_id == "switch_account":
             from platforms.kiro.switch import (
-                refresh_kiro_token, switch_kiro_account, restart_kiro_ide,
+                refresh_kiro_token,
+                switch_kiro_account,
+                restart_kiro_ide,
             )
             from platforms.kiro.core import KiroRegister
             from core.base_mailbox import create_mailbox, MailboxAccount
@@ -119,11 +135,14 @@ class KiroPlatform(BasePlatform):
             # Kiro 桌面端需要完整的 Builder ID SSO 缓存。
             # 只有 accessToken/sessionToken 的网页态账号无法稳定切到桌面应用。
             if not access_token:
-                return {"ok": False, "error": "当前账号缺少 accessToken，无法切换到桌面应用"}
+                return {
+                    "ok": False,
+                    "error": "当前账号缺少 accessToken，无法切换到桌面应用",
+                }
             if not refresh_token or not client_id or not client_secret:
                 if account.email and account.password:
                     reg = KiroRegister(proxy=self.config.proxy, tag="KIRO-SWITCH")
-                    reg.log = getattr(self, "_log_fn", print)
+                    reg.log_fn = getattr(self, "_log_fn", print)
                     otp_callback = None
                     mailbox_extra = dict(self.config.extra or {})
                     for key in (
@@ -142,7 +161,7 @@ class KiroPlatform(BasePlatform):
                             mailbox = create_mailbox(
                                 provider=mail_provider,
                                 extra=mailbox_extra,
-                                proxy=self.config.proxy,
+                                proxy=self.config.proxy or "",
                             )
                             mail_account = MailboxAccount(
                                 email=account.email,
@@ -158,16 +177,18 @@ class KiroPlatform(BasePlatform):
                                         keyword="",
                                         timeout=45,
                                         before_ids=before_ids,
-                                        code_pattern=r'(?is)(?:verification\s+code|验证码)[^0-9]{0,20}(\d{6})',
+                                        code_pattern=r"(?is)(?:verification\s+code|验证码)[^0-9]{0,20}(\d{6})",
                                     )
                                 except Exception:
-                                    reg.log("未等到新验证码，回退读取最近一封身份验证邮件 ...")
+                                    reg.log(
+                                        "未等到新验证码，回退读取最近一封身份验证邮件 ..."
+                                    )
                                     code = mailbox.wait_for_code(
                                         mail_account,
                                         keyword="",
                                         timeout=15,
-                                        before_ids=None,
-                                        code_pattern=r'(?is)(?:verification\s+code|验证码)[^0-9]{0,20}(\d{6})',
+                                        before_ids=set(),
+                                        code_pattern=r"(?is)(?:verification\s+code|验证码)[^0-9]{0,20}(\d{6})",
                                     )
                                 if code:
                                     reg.log(f"桌面授权验证码: {code}")
@@ -219,13 +240,16 @@ class KiroPlatform(BasePlatform):
                 return {"ok": False, "error": msg}
 
             restart_ok, restart_msg = restart_kiro_ide()
-            return {"ok": True, "data": {
-                "accessToken": access_token,
-                "refreshToken": refresh_token,
-                "clientId": client_id,
-                "clientSecret": client_secret,
-                "message": f"{msg}。{restart_msg}" if restart_ok else msg,
-            }}
+            return {
+                "ok": True,
+                "data": {
+                    "accessToken": access_token,
+                    "refreshToken": refresh_token,
+                    "clientId": client_id,
+                    "clientSecret": client_secret,
+                    "message": f"{msg}。{restart_msg}" if restart_ok else msg,
+                },
+            }
 
         elif action_id == "refresh_token":
             from platforms.kiro.switch import refresh_kiro_token

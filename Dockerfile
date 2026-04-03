@@ -37,7 +37,7 @@ COPY scripts/install_camoufox.py /tmp/install_camoufox.py
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl ca-certificates \
-        libgtk-3-0 libx11-xcb1 libasound2 \
+        libgtk-3-0 libx11-xcb1 libasound2 xvfb xauth \
     && curl -fsSL https://go.dev/dl/go1.24.2.linux-amd64.tar.gz | tar -C /usr/local -xz \
     && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*

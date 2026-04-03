@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
+from core.browser_runtime import (
+    ensure_browser_display_available,
+    resolve_browser_headless,
+)
 from core.proxy_utils import build_playwright_proxy_config
 
 
@@ -40,8 +44,14 @@ def get_sentinel_token_via_browser(
         return None
 
     target_url = str(page_url or _flow_page_url(flow)).strip() or _flow_page_url(flow)
-    launch_args = {
-        "headless": bool(headless),
+    effective_headless, reason = resolve_browser_headless(headless)
+    ensure_browser_display_available(effective_headless)
+    logger(
+        f"Sentinel Browser 模式: {'headless' if effective_headless else 'headed'} ({reason})"
+    )
+
+    launch_args: dict[str, Any] = {
+        "headless": effective_headless,
         "args": [
             "--no-sandbox",
             "--disable-blink-features=AutomationControlled",

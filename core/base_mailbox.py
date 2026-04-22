@@ -3068,6 +3068,9 @@ class LuckMailMailbox(BaseMailbox):
 class OutlookMailbox(BaseMailbox):
     """Outlook 本地账号池（IMAP / OAuth）"""
 
+    # 全局锁：防止并发线程取到同一个账号
+    _global_pop_lock = threading.Lock()
+
     def __init__(
         self,
         imap_server: str = "",
@@ -3109,7 +3112,7 @@ class OutlookMailbox(BaseMailbox):
         from core.db import engine, OutlookAccountModel
         from datetime import datetime, timezone
 
-        with self._lock:
+        with OutlookMailbox._global_pop_lock:
             with Session(engine) as session:
                 account = (
                     session.exec(
@@ -3156,7 +3159,7 @@ class OutlookMailbox(BaseMailbox):
 
     @staticmethod
     def restore_all_reserved():
-        """服务重启时：将所有 enabled=False 的邮箱归还"""
+        """服务重启时：将中断预留的邮箱归还（已注册的不归还）"""
         from sqlmodel import Session, select
         from core.db import engine, OutlookAccountModel
         from datetime import datetime, timezone
@@ -3167,6 +3170,9 @@ class OutlookMailbox(BaseMailbox):
                 ).all()
                 count = 0
                 for acc in reserved:
+                    # 跳过各平台已注册的账号，保持 disabled
+                    if acc.gpt_register_status == "已注册":
+                        continue
                     acc.enabled = True
                     acc.updated_at = datetime.now(timezone.utc)
                     session.add(acc)

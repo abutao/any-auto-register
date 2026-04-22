@@ -274,10 +274,12 @@ class ChatGPTProtocolRegister:
         proxy: Optional[str] = None,
         log_fn: Callable = print,
         cookie_dir: str = "cookies",
+        browser_bootstrap: bool = True,
     ):
         self.proxy = proxy
         self.log = log_fn
         self.cookie_dir = cookie_dir
+        self._browser_bootstrap = browser_bootstrap
 
         # 随机指纹
         self.impersonate, self.ua, self.sec_ch_ua, self.chrome_full = _random_chrome()
@@ -301,6 +303,119 @@ class ChatGPTProtocolRegister:
             "sec-ch-ua-platform": '"Windows"',
         })
         self.session.cookies.set("oai-did", self.device_id, domain="chatgpt.com")
+
+    # ── 浏览器预热：获取 cf_clearance ──
+
+    def _bootstrap_clearance(self):
+        """用 DrissionPage 快速访问 auth.openai.com 拿到 cf_clearance，注入到 curl_cffi session"""
+        self.log("[Bootstrap] 启动浏览器获取 Cloudflare clearance...")
+        try:
+            from DrissionPage import ChromiumOptions, ChromiumPage
+
+            co = ChromiumOptions()
+            co.auto_port()
+            co.new_env()
+            co.incognito()
+            co.set_argument("--disable-blink-features=AutomationControlled")
+            co.set_argument("--no-sandbox")
+            co.set_argument("--disable-gpu")
+            co.set_argument("--lang=en-US")
+            co.set_argument("--window-size=1920,1080")
+            co.set_user_agent(self.ua)
+            if self.proxy:
+                co.set_proxy(self.proxy)
+
+            page = ChromiumPage(addr_or_opts=co)
+            try:
+                page.run_js('Object.defineProperty(navigator,"webdriver",{get:()=>undefined});window.chrome={runtime:{}};')
+
+                # 访问 chatgpt.com 获取初始 cookies
+                page.get("https://chatgpt.com/", timeout=30)
+                time.sleep(4)
+
+                # 访问 auth.openai.com 获取 cf_clearance
+                page.get(f"{self.AUTH}/log-in", timeout=20)
+
+                # 等待 cf_clearance 出现（Cloudflare Challenge 需要几秒）
+                has_clearance = False
+                for _ in range(15):
+                    time.sleep(1)
+                    cdp_check = page.run_cdp("Network.getAllCookies")
+                    if any(
+                        c.get("name") == "cf_clearance" and "openai" in c.get("domain", "")
+                        for c in (cdp_check.get("cookies") or [])
+                    ):
+                        has_clearance = True
+                        break
+
+                # 也访问 sentinel 域获取其 clearance
+                if has_clearance:
+                    try:
+                        page.get("https://sentinel.openai.com/", timeout=10)
+                        time.sleep(3)
+                    except Exception:
+                        pass
+
+                # 提取所有 cookies
+                cdp_cookies = page.run_cdp("Network.getAllCookies")
+                browser_cookies = cdp_cookies.get("cookies", []) if cdp_cookies else []
+
+                injected = 0
+                target_domains = (".chatgpt.com", "chatgpt.com", ".auth.openai.com", "auth.openai.com", ".openai.com")
+                target_names = {
+                    "cf_clearance", "__cf_bm", "_cfuvid", "__cflb",
+                    "oai-did", "oai-sc", "oai-chat-web-route",
+                    "__Host-next-auth.csrf-token", "__Secure-next-auth.callback-url",
+                    "__Secure-next-auth.state",
+                }
+
+                for c in browser_cookies:
+                    name = c.get("name", "")
+                    value = c.get("value", "")
+                    domain = c.get("domain", "")
+                    path = c.get("path", "/")
+
+                    if not name or not value:
+                        continue
+
+                    is_target = any(domain.endswith(d) or domain == d for d in target_domains)
+                    if not is_target and name not in target_names:
+                        continue
+
+                    # 确保 domain 格式正确（curl_cffi 需要不带前导点）
+                    clean_domain = domain.lstrip(".")
+                    try:
+                        self.session.cookies.set(name, value, domain=clean_domain, path=path)
+                        injected += 1
+                    except TypeError:
+                        try:
+                            self.session.cookies.set(name, value, domain=clean_domain)
+                            injected += 1
+                        except Exception:
+                            pass
+                    # 也设置带点的版本（兼容性）
+                    if not domain.startswith("."):
+                        try:
+                            self.session.cookies.set(name, value, domain=f".{domain}", path=path)
+                        except Exception:
+                            pass
+
+                has_clearance = any(
+                    c.get("name") == "cf_clearance" and "openai" in c.get("domain", "")
+                    for c in browser_cookies
+                )
+                self.log(f"[Bootstrap] 注入 {injected} 个 cookies, cf_clearance={'有' if has_clearance else '无'}")
+
+            finally:
+                try:
+                    page.quit(force=True)
+                except Exception:
+                    pass
+
+        except ImportError:
+            self.log("[Bootstrap] DrissionPage 未安装，跳过浏览器预热")
+        except Exception as e:
+            self.log(f"[Bootstrap] 浏览器预热失败: {e}")
 
     def _sentinel_token(self, flow="authorize_continue") -> str:
         return _build_sentinel_token(
@@ -406,7 +521,19 @@ class ChatGPTProtocolRegister:
         # 确保 auth 域也有 oai-did cookie
         self.session.cookies.set("oai-did", self.device_id, domain=".auth.openai.com")
         self.session.cookies.set("oai-did", self.device_id, domain="auth.openai.com")
-        # 使用 username_password_create flow
+
+        if self._browser_bootstrap:
+            # 浏览器模式：密码提交需要浏览器绕过 TLS 检测
+            # 注意：浏览器会产生独立的 login_session，后续 OTP 验证也需要在浏览器中完成
+            # 所以这里标记一下，让 register() 知道需要跳过协议的 send_otp/validate_otp
+            self._browser_register_done = False
+            self._browser_otp_done = False
+            return self._register_via_browser_full(email, password)
+
+        return self._register_account_via_protocol(email, password)
+
+    def _register_account_via_protocol(self, email: str, password: str):
+        """纯协议提交注册（可能被 TLS 指纹检测拦截）"""
         sentinel = self._sentinel_token(flow="username_password_create")
         if sentinel:
             self.log("  Sentinel token OK")
@@ -427,6 +554,255 @@ class ChatGPTProtocolRegister:
         if r.status_code != 200:
             raise RuntimeError(f"注册失败 ({r.status_code}): {json.dumps(data, ensure_ascii=False)[:300]}")
         return data
+
+    def _register_via_browser_full(self, email: str, password: str):
+        """用浏览器完成注册+密码提交，OTP 由外部 otp_callback 在 register() 中处理后回填"""
+        self.log("  [Browser] 使用浏览器完成注册流程...")
+        try:
+            from DrissionPage import ChromiumOptions, ChromiumPage
+
+            co = ChromiumOptions()
+            co.auto_port()
+            co.new_env()
+            co.incognito()
+            co.set_argument("--disable-blink-features=AutomationControlled")
+            co.set_argument("--no-sandbox")
+            co.set_argument("--lang=en-US")
+            co.set_argument("--window-size=1920,1080")
+            co.set_user_agent(self.ua)
+            if self.proxy:
+                co.set_proxy(self.proxy)
+
+            page = ChromiumPage(addr_or_opts=co)
+            page.run_js('Object.defineProperty(navigator,"webdriver",{get:()=>undefined});window.chrome={runtime:{}};')
+
+            # 从首页开始
+            page.get(f"{self.BASE}/", timeout=30)
+            time.sleep(4)
+
+            # 点注册
+            for label in ["Sign up", "注册", "Get started"]:
+                try:
+                    btn = page.ele(f"text:{label}", timeout=3)
+                    if btn:
+                        btn.click()
+                        break
+                except Exception:
+                    continue
+            time.sleep(4)
+
+            # 填邮箱
+            email_input = page.ele('css:input[type="email"]', timeout=8) or page.ele('css:input[name="email"]', timeout=3)
+            if email_input:
+                email_input.click()
+                email_input.input(email, clear=True)
+                time.sleep(0.3)
+                page.run_js('document.querySelector("form button[type=submit]")?.click()')
+                time.sleep(4)
+
+            # 检查是否已注册
+            if "/log-in" in page.url:
+                page.quit(force=True)
+                raise RuntimeError("该邮箱已注册过 ChatGPT")
+
+            # 等待密码页
+            for _ in range(10):
+                if "/create-account/password" in page.url:
+                    break
+                time.sleep(1)
+
+            # 填密码
+            pwd_input = page.ele('css:input[type="password"]', timeout=8)
+            if not pwd_input:
+                page.quit(force=True)
+                raise RuntimeError(f"浏览器未找到密码输入框, URL: {page.url}")
+
+            pwd_input.click()
+            pwd_input.input(password, clear=True)
+            time.sleep(0.5)
+            page.run_js('document.querySelector("button[type=submit]")?.click()')
+            time.sleep(5)
+
+            # 处理超时重试
+            for retry in range(3):
+                if "/email-verification" in page.url or "/about-you" in page.url:
+                    break
+                if "/create-account/password" in page.url:
+                    is_timeout = page.run_js('return /timed.out|糟糕|出错了/i.test(document.body?.innerText||"")')
+                    if is_timeout:
+                        self.log(f"  [Browser] 超时，重试 ({retry+1})...")
+                        page.run_js('const bs=document.querySelectorAll("button,[role=button]");for(const b of bs){if(/重试|try.again/i.test(b.textContent)){b.click();break;}}')
+                        time.sleep(3)
+                        pwd2 = page.ele('css:input[type="password"]', timeout=5)
+                        if pwd2:
+                            pwd2.click()
+                            pwd2.input(password, clear=True)
+                            time.sleep(0.5)
+                            page.run_js('document.querySelector("button[type=submit]")?.click()')
+                            time.sleep(5)
+                    else:
+                        time.sleep(2)
+
+            if "/email-verification" not in page.url and "/about-you" not in page.url:
+                page.quit(force=True)
+                raise RuntimeError(f"浏览器注册失败: {page.url}")
+
+            self.log("  [Browser] 密码提交成功，进入验证码页面")
+            self._browser_register_done = True
+            # 保留 page 引用，供后续 OTP 使用
+            self._browser_page = page
+            return {"status": "ok"}
+
+        except ImportError:
+            self.log("  [Browser] DrissionPage 未安装，回退协议模式")
+            return self._register_account_via_protocol(email, password)
+
+    def _browser_fill_otp(self, code: str):
+        """在浏览器中填入验证码"""
+        page = getattr(self, "_browser_page", None)
+        if not page:
+            raise RuntimeError("浏览器页面不可用")
+
+        self.log(f"  [Browser] 填入验证码 {code}...")
+        filled = page.run_js(f'''
+            const selectors = [
+                'input[name="code"]', 'input[autocomplete="one-time-code"]',
+                'input[type="text"][maxlength="6"]', 'input[inputmode="numeric"]',
+            ];
+            for (const sel of selectors) {{
+                const input = document.querySelector(sel);
+                if (input && input.offsetWidth > 0) {{
+                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                    setter.call(input, '{code}');
+                    input.dispatchEvent(new Event('input', {{bubbles: true}}));
+                    input.dispatchEvent(new Event('change', {{bubbles: true}}));
+                    return true;
+                }}
+            }}
+            const singles = Array.from(document.querySelectorAll('input[maxlength="1"]')).filter(e => e.offsetWidth > 0);
+            if (singles.length >= 6) {{
+                for (let i = 0; i < 6; i++) {{
+                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                    setter.call(singles[i], '{code}'[i]);
+                    singles[i].dispatchEvent(new Event('input', {{bubbles: true}}));
+                    singles[i].dispatchEvent(new Event('change', {{bubbles: true}}));
+                }}
+                return true;
+            }}
+            return false;
+        ''')
+
+        if not filled:
+            raise RuntimeError("浏览器未找到验证码输入框")
+
+        # 提交
+        time.sleep(0.5)
+        page.run_js('document.querySelector("button[type=submit]")?.click()')
+        time.sleep(5)
+
+        # 检查结果
+        if "/about-you" in page.url:
+            self.log("  [Browser] 验证码通过")
+            self._browser_otp_done = True
+            return True
+
+        # 检查是否验证码错误
+        page_text = (page.html or "").lower()
+        if "incorrect" in page_text or "错误" in page_text or "wrong" in page_text:
+            self.log("  [Browser] 验证码不正确")
+            return False
+
+        if "/about-you" not in page.url and "/email-verification" in page.url:
+            self.log("  [Browser] 验证码可能不正确，仍在验证页")
+            return False
+
+        self.log(f"  [Browser] 验证码提交后: {page.url}")
+        self._browser_otp_done = True
+        return True
+
+    def _browser_fill_profile(self, name: str, birthdate: str):
+        """在浏览器中填写个人信息"""
+        page = getattr(self, "_browser_page", None)
+        if not page:
+            return
+
+        if "/about-you" not in page.url:
+            return
+
+        self.log(f"  [Browser] 填写个人信息 {name}...")
+        # 填名字
+        name_input = page.ele('css:input[name="name"]', timeout=5) or page.ele('css:input[autocomplete="name"]', timeout=3)
+        if name_input:
+            name_input.click()
+            name_input.input(name, clear=True)
+            time.sleep(0.3)
+
+        # 填生日
+        year, month, day = birthdate.split("-")
+        page.run_js(f'''
+        (async function() {{
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+            const df = document.querySelector('div[role="group"][id*="birthday"]');
+            if (df) {{
+                const fill = async (seg, val) => {{
+                    if (!seg) return;
+                    seg.focus(); seg.click(); await sleep(100);
+                    for (const ch of val) {{
+                        seg.dispatchEvent(new KeyboardEvent('keydown', {{key:ch, bubbles:true}}));
+                        seg.dispatchEvent(new InputEvent('input', {{inputType:'insertText', data:ch, bubbles:true}}));
+                        await sleep(50);
+                    }}
+                    seg.dispatchEvent(new FocusEvent('blur', {{bubbles:true}})); await sleep(100);
+                }};
+                await fill(df.querySelector('[data-type="year"]'), '{year}');
+                await fill(df.querySelector('[data-type="month"]'), '{month.zfill(2)}');
+                await fill(df.querySelector('[data-type="day"]'), '{day.zfill(2)}');
+            }} else {{
+                const age = document.querySelector('input[name="age"]');
+                if (age) {{
+                    const s = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+                    s.call(age, '{2026 - int(year)}');
+                    age.dispatchEvent(new Event('input', {{bubbles:true}}));
+                }}
+            }}
+        }})();
+        ''')
+        time.sleep(1)
+
+        # 提交
+        page.run_js('document.querySelector("button[type=submit]")?.click()')
+        time.sleep(3)
+
+    def _browser_cleanup(self):
+        """关闭浏览器并回注 cookies"""
+        page = getattr(self, "_browser_page", None)
+        if not page:
+            return
+        self._extract_browser_cookies(page)
+        try:
+            page.quit(force=True)
+        except Exception:
+            pass
+        self._browser_page = None
+
+    def _extract_browser_cookies(self, page):
+        """从浏览器提取 cookies 回注到 curl_cffi session"""
+        try:
+            cdp_cookies = page.run_cdp("Network.getAllCookies")
+            for c in (cdp_cookies.get("cookies") or []):
+                name = c.get("name", "")
+                value = c.get("value", "")
+                domain = c.get("domain", "").lstrip(".")
+                if name and value and ("openai" in domain or "chatgpt" in domain):
+                    try:
+                        self.session.cookies.set(name, value, domain=domain, path=c.get("path", "/"))
+                    except Exception:
+                        try:
+                            self.session.cookies.set(name, value, domain=domain)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
     # ── Step 5: Send OTP ──
 
@@ -512,6 +888,11 @@ class ChatGPTProtocolRegister:
         birthdate = _random_birthday()
         full_name = f"{first_name} {last_name}"
 
+        # Browser bootstrap: 获取 cf_clearance
+        if self._browser_bootstrap:
+            self._bootstrap_clearance()
+            _delay(0.3, 0.5)
+
         # Step 0
         self.visit_homepage()
         _delay(0.3, 0.8)
@@ -537,7 +918,44 @@ class ChatGPTProtocolRegister:
             _delay(0.5, 1.0)
             self.register_account(email, password)
             _delay(0.3, 0.8)
-            # Step 5
+
+            # 如果用了浏览器模式，OTP 和 profile 也在浏览器中完成
+            if getattr(self, "_browser_register_done", False):
+                if not otp_callback:
+                    raise RuntimeError("需要 otp_callback 获取验证码")
+                _delay(1.0, 2.0)
+                code = otp_callback() or ""
+                if not code:
+                    self._browser_cleanup()
+                    raise RuntimeError("未获取到验证码")
+
+                ok = self._browser_fill_otp(code)
+                if not ok:
+                    # 可能验证码错，再试一次
+                    _delay(2.0, 3.0)
+                    code2 = otp_callback() or ""
+                    if code2 and code2 != code:
+                        ok = self._browser_fill_otp(code2)
+                if not ok:
+                    self._browser_cleanup()
+                    raise RuntimeError("验证码验证失败")
+
+                # 填 profile
+                self._browser_fill_profile(full_name, birthdate)
+                time.sleep(3)
+
+                # 等待跳转到 chatgpt.com
+                page = getattr(self, "_browser_page", None)
+                if page:
+                    for _ in range(15):
+                        if "chatgpt.com" in page.url and "auth.openai.com" not in page.url:
+                            break
+                        time.sleep(1)
+
+                self._browser_cleanup()
+                return self._build_result(email, password, full_name)
+
+            # Step 5 (协议模式)
             self.send_otp()
             need_otp = True
         elif "email-verification" in final_path or "email-otp" in final_path:

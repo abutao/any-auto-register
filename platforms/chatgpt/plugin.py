@@ -45,8 +45,8 @@ class ChatGPTPlatform(BasePlatform):
 
         mail_provider = extra_config.get("mail_provider", "")
 
-        # ── CF Worker 域名邮箱 → DrissionPage 浏览器注册 ──
-        if mail_provider == "cfworker":
+        # ── DrissionPage 浏览器注册（CF Worker / Outlook 都走浏览器模式） ──
+        if mail_provider in ("cfworker", "outlook"):
             return self._register_drission(email, password, proxy, extra_config, log_fn)
 
         # ── 其他邮箱 → 纯协议 v2 引擎 ──
@@ -112,43 +112,150 @@ class ChatGPTPlatform(BasePlatform):
         )
 
     def _register_drission(self, email, password, proxy, extra_config, log_fn) -> Account:
-        """使用 DrissionPage 浏览器注册（CF Worker 域名邮箱专用）"""
+        """使用 DrissionPage 浏览器注册（CF Worker / Outlook）"""
         from platforms.chatgpt.drission_register import register_chatgpt
 
-        cfworker_api_url = extra_config.get("cfworker_api_url", "")
-        cfworker_admin_token = extra_config.get("cfworker_admin_token", "")
-        cfworker_custom_auth = extra_config.get("cfworker_custom_auth", "")
-
-        # 域名优先级: enabled_domains > domain > 空
-        cfworker_domain = extra_config.get("cfworker_domain", "")
-        enabled_domains = extra_config.get("cfworker_enabled_domains", "")
-        if enabled_domains:
-            try:
-                domains = json.loads(enabled_domains) if isinstance(enabled_domains, str) else enabled_domains
-                if isinstance(domains, list) and domains:
-                    cfworker_domain = random.choice(domains)
-            except Exception:
-                pass
-
-        if not cfworker_api_url:
-            raise RuntimeError("CF Worker API URL 未配置，无法使用 DrissionPage 注册")
-
+        mail_provider = extra_config.get("mail_provider", "cfworker")
         headless = str(extra_config.get("drission_headless", "1")).strip().lower() in ("1", "true", "yes", "on")
-        log_fn(f"[DrissionPage] 使用 CF Worker 域名邮箱注册 (domain={cfworker_domain}, headless={headless})")
 
-        result = register_chatgpt(
-            email=email or "",
-            password=password or "",
-            proxy=proxy or "http://127.0.0.1:7890",
-            headless=headless,
-            cfworker_api_url=cfworker_api_url,
-            cfworker_admin_token=cfworker_admin_token,
-            cfworker_custom_auth=cfworker_custom_auth,
-            cfworker_domain=cfworker_domain,
-        )
+        # 公共参数
+        kwargs = {
+            "password": password or "",
+            "proxy": proxy or "http://127.0.0.1:7890",
+            "headless": headless,
+        }
 
-        if not result.get("success"):
-            raise RuntimeError(f"DrissionPage 注册失败: {result.get('error', '未知错误')}")
+        if mail_provider == "outlook":
+            # Outlook: 从邮箱池取账号，邮箱 + Graph API 取码
+            if not self.mailbox:
+                raise RuntimeError("Outlook 邮箱池未配置")
+
+            # 取一个未注册过 ChatGPT 的 Outlook 账号
+            mail_acct = None
+            max_skip = 20
+            for _ in range(max_skip):
+                try:
+                    candidate = self.mailbox.get_email()
+                except RuntimeError:
+                    break
+                # 检查是否已注册过 ChatGPT
+                candidate_id = int(candidate.account_id or 0)
+                if candidate_id:
+                    from sqlmodel import Session as _Session
+                    from core.db import engine as _engine, OutlookAccountModel
+                    with _Session(_engine) as _s:
+                        row = _s.get(OutlookAccountModel, candidate_id)
+                        if row and row.gpt_register_status == "已注册":
+                            # 已注册的不归还，保持 disabled，避免重复取出
+                            log_fn(f"[DrissionPage] 跳过已注册账号: {candidate.email}")
+                            continue
+                mail_acct = candidate
+                break
+
+            if not mail_acct:
+                raise RuntimeError("Outlook 邮箱池中没有可用的未注册账号")
+
+            outlook_email = mail_acct.email
+            outlook_extra = mail_acct.extra or {}
+
+            # 尝试注册，如果邮箱已注册自动换下一个
+            max_email_tries = 10
+            result = None
+            for email_try in range(max_email_tries):
+                outlook_email = mail_acct.email
+                outlook_extra = mail_acct.extra or {}
+
+                log_fn(f"[DrissionPage] 使用 Outlook 邮箱注册: {outlook_email} (headless={headless})")
+
+                try_kwargs = dict(kwargs)
+                try_kwargs["email"] = outlook_email
+                try_kwargs["mail_provider"] = "outlook"
+                try_kwargs["outlook_client_id"] = outlook_extra.get("client_id", "")
+                try_kwargs["outlook_refresh_token"] = outlook_extra.get("refresh_token", "")
+
+                result = register_chatgpt(**try_kwargs)
+
+                if result.get("success"):
+                    break
+
+                error_msg = result.get("error", "未知错误")
+                account_id = int(mail_acct.account_id or 0)
+
+                if "已注册" in error_msg or "登录页" in error_msg:
+                    # 邮箱已注册过，标记并取下一个
+                    if account_id:
+                        try:
+                            from sqlmodel import Session as _S2
+                            from core.db import engine as _e2, OutlookAccountModel
+                            with _S2(_e2) as _s2:
+                                row = _s2.get(OutlookAccountModel, account_id)
+                                if row:
+                                    row.gpt_register_status = "已注册"
+                                    row.enabled = False
+                                    _s2.add(row)
+                                    _s2.commit()
+                        except Exception:
+                            pass
+                    log_fn(f"[DrissionPage] 邮箱已注册，自动换下一个 ({email_try+1}/{max_email_tries})")
+
+                    # 取下一个
+                    mail_acct = None
+                    try:
+                        mail_acct = self.mailbox.get_email()
+                    except RuntimeError:
+                        break
+                    if not mail_acct:
+                        break
+                    continue
+                else:
+                    # 其他失败原因，归还邮箱并停止
+                    try:
+                        from core.base_mailbox import OutlookMailbox
+                        if account_id:
+                            OutlookMailbox.return_account(account_id)
+                            log_fn(f"[DrissionPage] 注册失败，已归还: {outlook_email}")
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"DrissionPage 注册失败: {error_msg}")
+
+            if not result or not result.get("success"):
+                raise RuntimeError("所有 Outlook 邮箱均已注册或不可用")
+
+            register_mode = "drission_outlook"
+
+        else:
+            # CF Worker: 自动生成域名邮箱
+            cfworker_api_url = extra_config.get("cfworker_api_url", "")
+            cfworker_admin_token = extra_config.get("cfworker_admin_token", "")
+            cfworker_custom_auth = extra_config.get("cfworker_custom_auth", "")
+
+            cfworker_domain = extra_config.get("cfworker_domain", "")
+            enabled_domains = extra_config.get("cfworker_enabled_domains", "")
+            if enabled_domains:
+                try:
+                    domains = json.loads(enabled_domains) if isinstance(enabled_domains, str) else enabled_domains
+                    if isinstance(domains, list) and domains:
+                        cfworker_domain = random.choice(domains)
+                except Exception:
+                    pass
+
+            if not cfworker_api_url:
+                raise RuntimeError("CF Worker API URL 未配置")
+
+            log_fn(f"[DrissionPage] 使用 CF Worker 域名邮箱注册 (domain={cfworker_domain}, headless={headless})")
+
+            kwargs["email"] = email or ""
+            kwargs["cfworker_api_url"] = cfworker_api_url
+            kwargs["cfworker_admin_token"] = cfworker_admin_token
+            kwargs["cfworker_custom_auth"] = cfworker_custom_auth
+            kwargs["cfworker_domain"] = cfworker_domain
+
+            result = register_chatgpt(**kwargs)
+
+            if not result.get("success"):
+                raise RuntimeError(f"DrissionPage 注册失败: {result.get('error', '未知错误')}")
+
+            register_mode = "drission_cfworker"
 
         log_fn(f"[DrissionPage] 注册成功: {result.get('email')}")
 
@@ -164,8 +271,8 @@ class ChatGPTPlatform(BasePlatform):
                 "session_token": result.get("session_token", ""),
                 "access_token": result.get("access_token", ""),
                 "name": result.get("name", ""),
-                "register_mode": "drission_cfworker",
-                "mail_provider": "cfworker",
+                "register_mode": register_mode,
+                "mail_provider": mail_provider,
             },
         )
 

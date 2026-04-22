@@ -187,6 +187,114 @@ def _cfworker_get_code(
     return None
 
 
+# ── Outlook Graph API 验证码获取 ──────────────────────────────────
+
+def _outlook_get_access_token(client_id: str, refresh_token: str) -> str:
+    """用 refresh_token 换取 Graph API access_token"""
+    import requests
+
+    endpoints = [
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
+        "https://login.live.com/oauth20_token.srf",
+        "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    ]
+
+    for endpoint in endpoints:
+        try:
+            resp = requests.post(
+                endpoint,
+                data={
+                    "client_id": client_id,
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                    "scope": "https://graph.microsoft.com/.default",
+                },
+                timeout=20,
+            )
+            if resp.status_code >= 400:
+                continue
+            data = resp.json()
+            token = data.get("access_token", "")
+            if token:
+                return token
+        except Exception:
+            continue
+    return ""
+
+
+def _outlook_get_code(
+    client_id: str,
+    refresh_token: str,
+    email: str,
+    timeout: int = CODE_TIMEOUT,
+    exclude_codes: set = None,
+) -> Optional[str]:
+    """从 Outlook Graph API 轮询获取 OpenAI 验证码"""
+    import re
+    import requests
+
+    exclude = exclude_codes or set()
+    access_token = _outlook_get_access_token(client_id, refresh_token)
+    if not access_token:
+        _log("Outlook", "获取 Graph API access_token 失败", "ERROR")
+        return None
+
+    # OpenAI 验证码邮件的发件人和主题特征
+    OPENAI_SENDERS = {"noreply@tm.openai.com", "noreply@openai.com", "noreply@email.openai.com"}
+    OPENAI_SUBJECT_KEYWORDS = {"openai", "chatgpt", "verify", "verification", "code", "验证"}
+
+    start = time.time()
+    seen_ids = set()
+
+    while time.time() - start < timeout:
+        try:
+            for folder in ["inbox", "junkemail"]:
+                resp = requests.get(
+                    f"https://graph.microsoft.com/v1.0/me/mailFolders/{folder}/messages",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={
+                        "$top": 10,
+                        "$orderby": "receivedDateTime desc",
+                        "$select": "id,subject,from,bodyPreview,body,receivedDateTime",
+                    },
+                    timeout=15,
+                )
+                if resp.status_code != 200:
+                    continue
+
+                messages = resp.json().get("value", [])
+                for m in messages:
+                    mid = m.get("id", "")
+                    if not mid or mid in seen_ids:
+                        continue
+                    seen_ids.add(mid)
+
+                    # 过滤发件人：只看 OpenAI 的邮件
+                    sender = ((m.get("from") or {}).get("emailAddress") or {}).get("address", "").lower()
+                    subject = m.get("subject", "")
+                    subject_lower = subject.lower()
+
+                    is_openai = sender in OPENAI_SENDERS or any(kw in subject_lower for kw in OPENAI_SUBJECT_KEYWORDS)
+                    if not is_openai:
+                        continue
+
+                    preview = m.get("bodyPreview", "")
+                    body = (m.get("body") or {}).get("content", "")
+                    text = f"{subject} {preview} {body}"
+
+                    codes = re.findall(r"\b(\d{6})\b", text)
+                    for code in codes:
+                        if code not in exclude:
+                            _log("Outlook", f"收到验证码: {code}")
+                            return code
+        except Exception as e:
+            _log("Outlook", f"轮询异常: {e}", "WARN")
+
+        time.sleep(POLL_INTERVAL)
+
+    return None
+
+
 # ── 注册流程 ──────────────────────────────────────────────────────
 
 def do_register(
@@ -199,9 +307,14 @@ def do_register(
     DrissionPage 10 步注册流程（仅执行 Step 1-5 + 获取 Session）
 
     mail_config: {
+        "provider": "cfworker" | "outlook",
+        # CF Worker:
         "api_url": str,
         "admin_token": str,
-        "custom_auth": str,  # optional
+        "custom_auth": str,
+        # Outlook:
+        "client_id": str,
+        "refresh_token": str,
     }
     """
     name = generate_name()
@@ -404,10 +517,18 @@ def do_register(
         # ── Step 4: 获取注册验证码 ──
         _log("Step4", "等待验证码页面...")
 
+        # 检查是否跳转到登录页（邮箱已注册过）
+        if "/log-in" in page.url:
+            return {"success": False, "error": "该邮箱已注册过 ChatGPT，跳转到了登录页"}
+
         # 如果仍在密码页，可能需要更多时间
         if "/create-account/password" in page.url:
             _log("Step4", "仍在密码页，等待跳转...", "WARN")
             _wait_for_url(page, "/email-verification", timeout=15)
+
+        # 再次检查登录页
+        if "/log-in" in page.url:
+            return {"success": False, "error": "该邮箱已注册过 ChatGPT，跳转到了登录页"}
 
         reached_verify = "/email-verification" in page.url
 
@@ -424,8 +545,9 @@ def do_register(
                 return {"success": False, "error": "该邮箱已注册"}
             return {"success": False, "error": f"未进入验证码页面, 当前: {page.url}"}
         else:
-            # 从 CF Worker 获取验证码
-            _log("Step4", "从 CF Worker 轮询验证码...")
+            # 获取验证码
+            provider = mail_config.get("provider", "cfworker")
+            _log("Step4", f"从 {provider} 轮询验证码...")
             used_codes = set()
             code_verified = False
             start_code = time.time()
@@ -434,14 +556,23 @@ def do_register(
                 if _is_browser_closed(page):
                     return {"success": False, "error": "浏览器已关闭"}
 
-                code = _cfworker_get_code(
-                    api_url=mail_config["api_url"],
-                    admin_token=mail_config.get("admin_token", ""),
-                    email=email,
-                    custom_auth=mail_config.get("custom_auth", ""),
-                    timeout=15,
-                    exclude_codes=used_codes,
-                )
+                if provider == "outlook":
+                    code = _outlook_get_code(
+                        client_id=mail_config.get("client_id", ""),
+                        refresh_token=mail_config.get("refresh_token", ""),
+                        email=email,
+                        timeout=15,
+                        exclude_codes=used_codes,
+                    )
+                else:
+                    code = _cfworker_get_code(
+                        api_url=mail_config.get("api_url", ""),
+                        admin_token=mail_config.get("admin_token", ""),
+                        email=email,
+                        custom_auth=mail_config.get("custom_auth", ""),
+                        timeout=15,
+                        exclude_codes=used_codes,
+                    )
 
                 if not code:
                     continue
@@ -797,19 +928,30 @@ def register_chatgpt(
     cfworker_custom_auth: str = "",
     cfworker_domain: str = "",
     save_cookie_path: str = "",
+    mail_provider: str = "cfworker",
+    outlook_client_id: str = "",
+    outlook_refresh_token: str = "",
 ) -> dict:
     """
     一键注册 ChatGPT 账号
 
-    如果不传 email，会自动从 CF Worker 生成域名邮箱。
-    save_cookie_path: 指定 Cookie 保存路径，留空则自动保存到 Results_ChatGPT/
+    mail_provider: "cfworker" 或 "outlook"
+    cfworker_*: CF Worker 参数（mail_provider=cfworker 时使用）
+    outlook_*: Outlook 参数（mail_provider=outlook 时使用）
     """
     import requests
 
     page = None
     try:
-        # 如果没有提供邮箱，从 CF Worker 生成
-        if not email:
+        # 根据 mail_provider 确定邮箱来源
+        if mail_provider == "outlook":
+            # Outlook: 邮箱由外部传入，必须提供 email
+            if not email:
+                return {"success": False, "error": "Outlook 模式需要提供邮箱地址"}
+            _log("Main", f"Outlook 邮箱: {email}")
+
+        elif not email:
+            # CF Worker: 自动生成邮箱
             if not cfworker_api_url:
                 return {"success": False, "error": "未提供邮箱且 CF Worker 未配置"}
 
@@ -846,6 +988,21 @@ def register_chatgpt(
             password = generate_password()
             _log("Main", f"已生成密码: {password}")
 
+        # 构建 mail_config
+        if mail_provider == "outlook":
+            mail_config = {
+                "provider": "outlook",
+                "client_id": outlook_client_id,
+                "refresh_token": outlook_refresh_token,
+            }
+        else:
+            mail_config = {
+                "provider": "cfworker",
+                "api_url": cfworker_api_url.rstrip("/") if cfworker_api_url else "",
+                "admin_token": cfworker_admin_token,
+                "custom_auth": cfworker_custom_auth,
+            }
+
         # 创建浏览器
         page = create_browser(proxy=proxy, headless=headless)
         if not page:
@@ -856,11 +1013,7 @@ def register_chatgpt(
             page=page,
             email=email,
             password=password,
-            mail_config={
-                "api_url": cfworker_api_url.rstrip("/"),
-                "admin_token": cfworker_admin_token,
-                "custom_auth": cfworker_custom_auth,
-            },
+            mail_config=mail_config,
         )
 
         # 注册成功后自动保存 Cookies
@@ -896,6 +1049,9 @@ if __name__ == "__main__":
     parser.add_argument("--cfworker-token", default="", help="CF Worker Admin Token")
     parser.add_argument("--cfworker-auth", default="", help="CF Worker Custom Auth")
     parser.add_argument("--cfworker-domain", default="", help="CF Worker 域名")
+    parser.add_argument("--mail-provider", default="cfworker", choices=["cfworker", "outlook"], help="邮箱服务")
+    parser.add_argument("--outlook-client-id", default="", help="Outlook Client ID")
+    parser.add_argument("--outlook-refresh-token", default="", help="Outlook Refresh Token")
     args = parser.parse_args()
 
     result = register_chatgpt(
@@ -908,6 +1064,9 @@ if __name__ == "__main__":
         cfworker_custom_auth=args.cfworker_auth,
         cfworker_domain=args.cfworker_domain,
         save_cookie_path=args.output,
+        mail_provider=args.mail_provider,
+        outlook_client_id=args.outlook_client_id,
+        outlook_refresh_token=args.outlook_refresh_token,
     )
 
     print("\n" + "=" * 60)

@@ -278,10 +278,11 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 control.checkpoint(attempt_id=attempt_id)
                 _proxy = req.proxy
                 if not _proxy:
+                    # 优先从代理池轮换（每个并发用不同 IP）
+                    _proxy = proxy_pool.get_next() if proxy_pool else None
+                if not _proxy:
                     from core.config_store import config_store as _cs
                     _proxy = _cs.get("default_proxy", "") or "http://127.0.0.1:7890"
-                if not _proxy:
-                    _proxy = proxy_pool.get_next()
                 _proxy = normalize_proxy_url(_proxy)
                 if req.register_delay_seconds > 0:
                     with start_gate_lock:

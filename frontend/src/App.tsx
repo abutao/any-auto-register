@@ -12,11 +12,13 @@ import {
   LogoutOutlined,
   MailOutlined,
   ClockCircleOutlined,
+  CreditCardOutlined,
 } from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
 import Dashboard from '@/pages/Dashboard'
 import Accounts from '@/pages/Accounts'
 import RegisterTaskPage from '@/pages/RegisterTaskPage'
+import PaymentPage from '@/pages/PaymentPage'
 import Proxies from '@/pages/Proxies'
 import Settings from '@/pages/Settings'
 import TaskHistory from '@/pages/TaskHistory'
@@ -122,6 +124,11 @@ function AppContent() {
       key: '/outlook',
       icon: <MailOutlined />,
       label: 'Outlook 邮箱',
+    },
+    {
+      key: '/payment',
+      icon: <CreditCardOutlined />,
+      label: '支付升级',
     },
     {
       key: '/scheduled',
@@ -252,6 +259,7 @@ function AppContent() {
             <Route path="/outlook" element={<OutlookAccounts />} />
             <Route path="/scheduled" element={<ScheduledJobs />} />
             <Route path="/register" element={<RegisterTaskPage />} />
+            <Route path="/payment" element={<PaymentPage />} />
             <Route path="/history" element={<TaskHistory />} />
             <Route path="/proxies" element={<Proxies />} />
             <Route path="/settings" element={<Settings />} />

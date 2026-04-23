@@ -18,3 +18,4 @@ httpx>=0.27.0
 selectolax>=0.3.21
 names>=0.3.0
 DrissionPage>=4.1.0
+Faker>=38.0.0

@@ -1050,6 +1050,16 @@ export default function Accounts() {
 
   if (isChatgptPlatform) {
     columns.push({
+      title: '套餐',
+      key: 'plan_type',
+      width: 80,
+      render: (_: any, record: any) => {
+        const plan = record.extra?.plan_type || 'free'
+        const colors: Record<string, string> = { plus: 'blue', business: 'purple', team: 'cyan' }
+        return <Tag color={colors[plan] || 'default'}>{plan.toUpperCase()}</Tag>
+      },
+    })
+    columns.push({
       title: 'Cookie 文件',
       key: 'cookie_file',
       width: 100,

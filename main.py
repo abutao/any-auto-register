@@ -20,6 +20,7 @@ from api.auth import router as auth_router
 from api.outlook import router as outlook_router
 from api.scheduled import router as scheduled_router
 from api.payment import router as payment_router
+from api.cpa_monitor import router as cpa_monitor_router
 
 EXPECTED_CONDA_ENV = os.getenv("APP_CONDA_ENV", "any-auto-register")
 
@@ -120,6 +121,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(outlook_router, prefix="/api")
 app.include_router(scheduled_router, prefix="/api")
 app.include_router(payment_router, prefix="/api")
+app.include_router(cpa_monitor_router, prefix="/api")
 
 
 @app.get("/api/solver/status")

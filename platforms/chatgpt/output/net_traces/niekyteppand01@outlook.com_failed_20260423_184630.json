@@ -1,0 +1,158 @@
+{
+  "meta": {
+    "email": "niekyteppand01@outlook.com",
+    "thread_id": "",
+    "start_time": "2026-04-23T18:42:14+08:00",
+    "card_info": {
+      "card_number_formatted": "6250 0372 7844 3607",
+      "expiry_date": "09/30",
+      "cvv": "439",
+      "bin_prefix": "625003",
+      "full_name": "고아라",
+      "country": "KR",
+      "state": "Seoul",
+      "city": "구로구",
+      "address": "경인로 661, 신도림1차푸르지오",
+      "address_line2": "",
+      "zip_code": "08208"
+    },
+    "plan_type": "plus",
+    "country": "KR",
+    "checkout_country": "AUTO",
+    "currency": "USD",
+    "checkout_url": "",
+    "use_proxy": true,
+    "proxy_port": null,
+    "proxy_url": "http://127.0.0.1:7890",
+    "end_time": "2026-04-23T18:46:30+08:00",
+    "success": false,
+    "result_detail": "连续5次卡被拒",
+    "total_requests": 0,
+    "duration_seconds": 255.6,
+    "summary": {
+      "domain_stats": {},
+      "error_requests": []
+    }
+  },
+  "entries": [
+    {
+      "type": "event",
+      "event": "cookies_set",
+      "detail": "count=21",
+      "timestamp": "2026-04-23T18:42:52+08:00",
+      "elapsed_ms": 37507
+    },
+    {
+      "type": "event",
+      "event": "navigate_result",
+      "detail": "{\"success\": true, \"payment_url\": \"https://chatgpt.com/checkout/openai_llc/cs_live_a1L0l4Et9i2ebf50IGrYQQbdHMkeeHj826rNbSrVMZB9nQnw1CN7hfbqsU\", \"current_url\": \"https://chatgpt.com/checkout/openai_llc/cs_live_a1L0l4Et9i2ebf50IGrYQQbdHMkeeHj826rNbSrVMZB9nQnw1CN7hfbqsU\"}",
+      "timestamp": "2026-04-23T18:43:07+08:00",
+      "elapsed_ms": 52284
+    },
+    {
+      "type": "event",
+      "event": "navigate_mode",
+      "detail": "page_navigate",
+      "timestamp": "2026-04-23T18:43:07+08:00",
+      "elapsed_ms": 52284
+    },
+    {
+      "type": "event",
+      "event": "auto_fill",
+      "detail": "attempt=1",
+      "timestamp": "2026-04-23T18:43:26+08:00",
+      "elapsed_ms": 71398
+    },
+    {
+      "type": "event",
+      "event": "auto_submit",
+      "detail": "attempt=1",
+      "timestamp": "2026-04-23T18:43:47+08:00",
+      "elapsed_ms": 92948
+    },
+    {
+      "type": "event",
+      "event": "auto_card_change",
+      "detail": "#1 err=您的银行卡被拒绝了。",
+      "timestamp": "2026-04-23T18:43:57+08:00",
+      "elapsed_ms": 103142
+    },
+    {
+      "type": "event",
+      "event": "auto_submit",
+      "detail": "attempt=2",
+      "timestamp": "2026-04-23T18:44:19+08:00",
+      "elapsed_ms": 124703
+    },
+    {
+      "type": "event",
+      "event": "auto_card_change",
+      "detail": "#2 err=您的银行卡被拒绝了。",
+      "timestamp": "2026-04-23T18:44:29+08:00",
+      "elapsed_ms": 134929
+    },
+    {
+      "type": "event",
+      "event": "auto_submit",
+      "detail": "attempt=3",
+      "timestamp": "2026-04-23T18:44:48+08:00",
+      "elapsed_ms": 153959
+    },
+    {
+      "type": "event",
+      "event": "auto_card_change",
+      "detail": "#3 err=您的银行卡被拒绝了。",
+      "timestamp": "2026-04-23T18:44:58+08:00",
+      "elapsed_ms": 164135
+    },
+    {
+      "type": "event",
+      "event": "auto_submit",
+      "detail": "attempt=4",
+      "timestamp": "2026-04-23T18:45:19+08:00",
+      "elapsed_ms": 184422
+    },
+    {
+      "type": "event",
+      "event": "auto_card_change",
+      "detail": "#4 err=您的银行卡被拒绝了。",
+      "timestamp": "2026-04-23T18:45:29+08:00",
+      "elapsed_ms": 194567
+    },
+    {
+      "type": "event",
+      "event": "auto_submit",
+      "detail": "attempt=5",
+      "timestamp": "2026-04-23T18:45:51+08:00",
+      "elapsed_ms": 217027
+    },
+    {
+      "type": "event",
+      "event": "auto_card_change",
+      "detail": "#5 err=您的银行卡被拒绝了。",
+      "timestamp": "2026-04-23T18:46:01+08:00",
+      "elapsed_ms": 227210
+    },
+    {
+      "type": "event",
+      "event": "auto_submit",
+      "detail": "attempt=6",
+      "timestamp": "2026-04-23T18:46:18+08:00",
+      "elapsed_ms": 244101
+    },
+    {
+      "type": "event",
+      "event": "auto_done",
+      "detail": "card_changes=5",
+      "timestamp": "2026-04-23T18:46:29+08:00",
+      "elapsed_ms": 254760
+    },
+    {
+      "type": "event",
+      "event": "stripe_captured",
+      "detail": "[{\"url\": \"https://api.stripe.com/v1/consumers/sessions/lookup\", \"method\": \"POST\", \"reqBodyLen\": 337, \"reqBodyPreview\": \"request_surface=web_elements_controller&email_address=niekyteppand01%40outlook.com&email_source=default_value&session_id=cs_live_a1L0l4Et9i2ebf50IGrYQQbdHMkeeHj826rNbSrVMZB9nQnw1CN7hfbqsU&key=pk_live_51HOrSwC6h1nxGoI3lTAgRjYVrz4dU3fVOabyCcKR3pbEJguCVAlqCxdxCUvoRh1XWwRacViovU3kLKvpkjh7IqkW00iXQsjo3n&do_not_log_consumer_funnel_event=true\", \"ts\": 1776940995702, \"status\": 200, \"respLen\": 391, \"respPreview\": \"{\\n  \\\"account_id\\\": null,\\n  \\\"auth_session_client_secret\\\": null,\\n  \\\"available_partner_accounts\\\": [],\\n  \\\"avatar\\\": null,\\n  \\\"consumer_session\\\": null,\\n  \\\"error_message\\\": \\\"No consumer found for the given email address.\\\",\\n  \\\"exists\\\": false,\\n  \\\"experiments\\\": [],\\n  \\\"link_auth_intent\\\": null,\\n  \\\"link_brand\\\": \\\"link\\\",\\n  \\\"onboarded_to_balance\\\": null,\\n  \\\"publishable_key\\\": null,\\n  \\\"suggested_email\\\": null\\n}\", \"source\": \"iframe_3\"}, {\"url\": \"https://r.stripe.com/b\", \"method\": \"POST\", \"reqBodyLen\": 3008, \"reqBodyPreview\": \"client_id=stripe-js&num_requests=2&events=%5B%7B%22event_name%22%3A%22elements.link.lookup_cache.hit%22%2C%22created%22%3A1776940995665%2C%22batching_enabled%22%3Atrue%2C%22event_count%22%3A%2211%22%2C%22os%22%3A%22MacOS%22%2C%22browserFamily%22%3A%22Chrome%22%2C%22version%22%3A%22f0109f9195%22%2C%22event_id%22%3A%22b3b6cb6f-23ec-4501-8f66-fac2bcbdd580%22%2C%22team_identifier%22%3A%22t_6%22%2C%22deploy_status%22%3A%22main%22%2C%22browserClassification%22%3A%22modern%22%2C%22browser_classification_v2%22%3A%222024%22%2C%22connection_rtt%22%3A%221200%22%2C%22connection_downlink%22%3A%221.45%22%2C%22connection_effective_type%22%3A%223g%22%2C%22link_api_client%22%3A%22true%22%2C%22publishable_key%22%3A%22pk_live_51HOrSwC6h1nxGoI3lTAgRjYVrz4dU3fVOabyCcKR3pbEJguCVAlqCxdxCUvoRh1XWwRacViovU3kLKvpkjh7IqkW00iXQsjo3n%22%2C%22key%22%3A%22pk_live_51HOrSwC6h1nxGoI3lTAgRjYVrz4dU3fVOabyCcKR3pbEJguCVAlqCxdxCUvoRh1XWwRacViovU",
+      "timestamp": "2026-04-23T18:46:29+08:00",
+      "elapsed_ms": 254854
+    }
+  ]
+}

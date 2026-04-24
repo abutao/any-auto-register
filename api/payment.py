@@ -117,21 +117,26 @@ def _update_account_plan(account_id: int, plan_type: str, status: str, extra_pat
 
 
 def _run_single_payment(account_id: int, cookies: dict, email: str, config: dict) -> dict:
-    """执行单个账号的支付"""
-    from platforms.chatgpt.payment.payment_browser import do_payment
+    """执行单个账号的支付（带超时保护）"""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
     plan = config.get("plan", "plus")
-    country = config.get("country", "US")
-    checkout_country = config.get("checkout_country", "AUTO")
-    proxy = _get_proxy(config.get("proxy", ""))
-    max_retries = config.get("max_retries", 5)
-    headless = config.get("headless", True)
+    timeout_seconds = config.get("timeout", 600)  # 默认 10 分钟超时
 
     # 标记为支付中
     _update_account_plan(account_id, "free", "processing")
 
-    try:
-        result = do_payment(
+    def _do():
+        from platforms.chatgpt.payment.payment_browser import do_payment
+
+        country = config.get("country", "US")
+        checkout_country = config.get("checkout_country", "AUTO")
+        proxy = _get_proxy(config.get("proxy", ""))
+        max_retries = config.get("max_retries", 5)
+        headless = config.get("headless", True)
+        card_bin = config.get("card_bin", "625003")
+
+        return do_payment(
             cookies=cookies,
             email=email,
             plan_type=plan,
@@ -143,23 +148,28 @@ def _run_single_payment(account_id: int, cookies: dict, email: str, config: dict
             use_proxy=bool(proxy),
         )
 
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_do)
+            result = future.result(timeout=timeout_seconds)
+
         if result.get("success"):
             _update_account_plan(account_id, plan, "success", {
                 "payment_card_info": result.get("card_info", {}),
-                "payment_country": country,
+                "payment_country": config.get("country", "US"),
                 "payment_time": time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
             return {"ok": True, "email": email, "plan": plan}
         else:
-            _update_account_plan(account_id, "free", "failed", {
-                "payment_error": result.get("message", ""),
-            })
-            return {"ok": False, "email": email, "error": result.get("message", "支付失败")}
+            error_msg = result.get("message", "支付失败")
+            _update_account_plan(account_id, "free", "failed", {"payment_error": error_msg})
+            return {"ok": False, "email": email, "error": error_msg}
 
+    except FutureTimeout:
+        _update_account_plan(account_id, "free", "failed", {"payment_error": "支付超时"})
+        return {"ok": False, "email": email, "error": f"支付超时（{timeout_seconds}秒）"}
     except Exception as e:
-        _update_account_plan(account_id, "free", "failed", {
-            "payment_error": str(e),
-        })
+        _update_account_plan(account_id, "free", "failed", {"payment_error": str(e)})
         return {"ok": False, "email": email, "error": str(e)}
 
 

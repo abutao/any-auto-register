@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "email": "niekyteppand01@outlook.com",
+    "thread_id": "",
+    "start_time": "2026-04-23T17:32:45+08:00",
+    "card_info": {
+      "card_number_formatted": "6250 0350 6465 1490",
+      "expiry_date": "09/31",
+      "cvv": "978",
+      "bin_prefix": "625003",
+      "full_name": "임지연",
+      "country": "KR",
+      "state": "Seoul",
+      "city": "양천구",
+      "address": "목동서로 161, 목동신시가지 1단지",
+      "address_line2": "105동 302호",
+      "zip_code": "07986"
+    },
+    "plan_type": "plus",
+    "country": "KR",
+    "checkout_country": "AUTO",
+    "currency": "USD",
+    "checkout_url": "",
+    "use_proxy": true,
+    "proxy_port": null,
+    "proxy_url": "http://127.0.0.1:7890",
+    "end_time": "2026-04-23T17:33:24+08:00",
+    "success": false,
+    "result_detail": "浏览器连接断开",
+    "total_requests": 0,
+    "duration_seconds": 39.7,
+    "summary": {
+      "domain_stats": {},
+      "error_requests": []
+    }
+  },
+  "entries": [
+    {
+      "type": "event",
+      "event": "cookies_set",
+      "detail": "count=21",
+      "timestamp": "2026-04-23T17:32:58+08:00",
+      "elapsed_ms": 13031
+    },
+    {
+      "type": "event",
+      "event": "navigate_result",
+      "detail": "{\"success\": true, \"payment_url\": \"https://chatgpt.com/checkout/openai_llc/cs_live_a1jz18iECOgzMLuFsBExijRU9XCicSUXJ28EtimH8ZJGj1EAcIXqHvTWhc\", \"current_url\": \"https://chatgpt.com/checkout/openai_llc/cs_live_a1jz18iECOgzMLuFsBExijRU9XCicSUXJ28EtimH8ZJGj1EAcIXqHvTWhc\"}",
+      "timestamp": "2026-04-23T17:33:07+08:00",
+      "elapsed_ms": 22551
+    },
+    {
+      "type": "event",
+      "event": "navigate_mode",
+      "detail": "page_navigate",
+      "timestamp": "2026-04-23T17:33:07+08:00",
+      "elapsed_ms": 22551
+    }
+  ]
+}

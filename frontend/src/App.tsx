@@ -19,6 +19,7 @@ import Dashboard from '@/pages/Dashboard'
 import Accounts from '@/pages/Accounts'
 import RegisterTaskPage from '@/pages/RegisterTaskPage'
 import PaymentPage from '@/pages/PaymentPage'
+import CpaMonitorPage from '@/pages/CpaMonitorPage'
 import Proxies from '@/pages/Proxies'
 import Settings from '@/pages/Settings'
 import TaskHistory from '@/pages/TaskHistory'
@@ -129,6 +130,11 @@ function AppContent() {
       key: '/payment',
       icon: <CreditCardOutlined />,
       label: '支付升级',
+    },
+    {
+      key: '/cpa',
+      icon: <DashboardOutlined />,
+      label: 'CPA 监控',
     },
     {
       key: '/scheduled',
@@ -260,6 +266,7 @@ function AppContent() {
             <Route path="/scheduled" element={<ScheduledJobs />} />
             <Route path="/register" element={<RegisterTaskPage />} />
             <Route path="/payment" element={<PaymentPage />} />
+            <Route path="/cpa" element={<CpaMonitorPage />} />
             <Route path="/history" element={<TaskHistory />} />
             <Route path="/proxies" element={<Proxies />} />
             <Route path="/settings" element={<Settings />} />

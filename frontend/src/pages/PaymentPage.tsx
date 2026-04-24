@@ -13,6 +13,8 @@ import {
   message,
   Typography,
   Alert,
+  Modal,
+  notification,
 } from 'antd'
 import { apiFetch } from '../lib/utils'
 
@@ -99,6 +101,15 @@ export default function PaymentPage() {
 
   useEffect(() => { load() }, [load])
 
+  // 加载全局代理配置
+  useEffect(() => {
+    apiFetch('/config').then(cfg => {
+      const proxy = cfg.default_proxy || 'http://127.0.0.1:7890'
+      form.setFieldValue('proxy', proxy)
+      batchForm.setFieldValue('proxy', proxy)
+    }).catch(() => {})
+  }, [form, batchForm])
+
   // 轮询支付任务状态
   useEffect(() => {
     if (!paymentJobId || !polling) return
@@ -108,8 +119,46 @@ export default function PaymentPage() {
         setPaymentStatus(s)
         if (s.status === 'done') {
           setPolling(false)
-          message.info(`支付完成: 成功 ${s.success}, 失败 ${s.failed}`)
           load()
+          // 弹出结果通知
+          if (s.success > 0 && s.failed === 0) {
+            notification.success({
+              message: '支付全部成功',
+              description: `成功升级 ${s.success} 个账号`,
+              duration: 10,
+            })
+          } else if (s.success > 0) {
+            notification.warning({
+              message: '支付部分成功',
+              description: `成功 ${s.success} 个，失败 ${s.failed} 个`,
+              duration: 10,
+            })
+          } else {
+            notification.error({
+              message: '支付全部失败',
+              description: `${s.failed} 个账号支付失败`,
+              duration: 10,
+            })
+          }
+          // 显示详细结果
+          if (s.results && s.results.length > 0) {
+            Modal.info({
+              title: `支付结果（成功 ${s.success} / 失败 ${s.failed}）`,
+              width: 600,
+              content: (
+                <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                  {s.results.map((r: any, i: number) => (
+                    <div key={i} style={{ padding: '4px 0', borderBottom: '1px solid #f0f0f0' }}>
+                      <Tag color={r.ok ? 'green' : 'red'}>{r.ok ? '成功' : '失败'}</Tag>
+                      <Text>{r.email}</Text>
+                      {r.error && <Text type="danger" style={{ marginLeft: 8 }}>{r.error}</Text>}
+                      {r.plan && <Tag color="blue" style={{ marginLeft: 8 }}>{r.plan.toUpperCase()}</Tag>}
+                    </div>
+                  ))}
+                </div>
+              ),
+            })
+          }
         }
       } catch { setPolling(false) }
     }, 3000)
@@ -218,7 +267,8 @@ export default function PaymentPage() {
       <Card title="手动支付" style={{ marginBottom: 16 }}>
         <Form form={form} layout="inline" initialValues={{
           plan: 'plus', country: 'US', checkout_country: 'AUTO',
-          max_retries: 5, headless: true,
+          max_retries: 5, headless: true, proxy: 'http://127.0.0.1:7890',
+          card_bin: '625003',
         }}>
           <Form.Item name="plan" label="套餐">
             <Select options={PLAN_OPTIONS} style={{ width: 180 }} />
@@ -230,7 +280,7 @@ export default function PaymentPage() {
             <Select options={CHECKOUT_COUNTRY_OPTIONS} style={{ width: 150 }} />
           </Form.Item>
           <Form.Item name="card_bin" label="卡头">
-            <Input placeholder="留空随机" style={{ width: 100 }} />
+            <Input placeholder="625003" style={{ width: 130 }} />
           </Form.Item>
           <Form.Item name="max_retries" label="重试次数">
             <InputNumber min={1} max={20} style={{ width: 70 }} />
@@ -244,12 +294,23 @@ export default function PaymentPage() {
         </Form>
         <div style={{ marginTop: 12 }}>
           <Space>
-            <Button type="primary" onClick={handlePayment} disabled={selectedIds.length === 0}>
-              升级选中账号 ({selectedIds.length})
+            <Button type="primary" onClick={handlePayment} disabled={selectedIds.length === 0 || polling} loading={polling}>
+              {polling ? '支付中...' : `升级选中账号 (${selectedIds.length})`}
             </Button>
-            {paymentStatus && polling && (
-              <Text type="secondary">
-                进度: {paymentStatus.progress} | 成功: {paymentStatus.success} | 失败: {paymentStatus.failed}
+            {polling && paymentJobId && (
+              <Button danger onClick={async () => {
+                await apiFetch(`/payment/stop/${paymentJobId}`, { method: 'POST' })
+                message.info('正在停止...')
+              }}>
+                停止支付
+              </Button>
+            )}
+            {paymentStatus && (
+              <Text type={paymentStatus.status === 'done' ? (paymentStatus.success > 0 ? 'success' : 'danger') : 'secondary'}>
+                {paymentStatus.status === 'done'
+                  ? `完成: 成功 ${paymentStatus.success}, 失败 ${paymentStatus.failed}`
+                  : `进度: ${paymentStatus.progress} | 成功: ${paymentStatus.success} | 失败: ${paymentStatus.failed}`
+                }
               </Text>
             )}
           </Space>
